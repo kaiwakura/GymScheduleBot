@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>GymScheduleBot · Workouts that fit your week</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <header class="topbar">
@@ -89,7 +89,7 @@
           <input type="number" name="session_minutes" min="20" max="180" step="5" value="{{ form.session_minutes or 60 }}">
         </label>
         <label class="span2">Travel buffer before &amp; after (min)
-          <input type="number" name="buffer_minutes" min="0" max="60" step="5" value="{{ form.buffer_minutes if form.buffer_minutes is not none else 15 }}">
+          <input type="number" name="buffer_minutes" min="0" max="60" step="5" value="{{ form.buffer_minutes|default(15) }}">
         </label>
         <label class="span2">Anything else? <small>(plain English)</small>
           <textarea name="notes" rows="3" maxlength="1000" placeholder="e.g. I hate mornings, soccer on Tuesdays 6-7:30pm, no gym on Sundays">{{ form.notes or '' }}</textarea>
