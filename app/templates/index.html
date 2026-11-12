@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GymScheduleBot · Workouts that fit your week</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">⇄</span>
+    <div>
+      <h1>GymScheduleBot</h1>
+      <p>Your training split, shaped by your week.</p>
+    </div>
+  </div>
+  <div class="status">
+    <span class="pill {{ 'on' if ai_enabled else '' }}">AI {{ 'on' if ai_enabled else 'off (rule-based)' }}</span>
+    {% if google_connected %}
+      <form method="post" action="/auth/google/logout"><button class="pill on link">Google connected · Disconnect</button></form>
+    {% endif %}
+  </div>
+</header>
+
+{% if flash %}<div class="banner">{{ flash }}</div>{% endif %}
+{% if error %}<div class="banner error">{{ error }}</div>{% endif %}
+
+<main class="layout">
+  <!-- ============================================================ form -->
+  <aside class="card">
+    <form method="post" action="/plan" enctype="multipart/form-data" id="plan-form">
+      <input type="hidden" name="timezone" id="tz">
+
+      <fieldset>
+        <legend>1 · Your calendar</legend>
+        {% set src = form.source or 'demo:busy' %}
+        {% for key, label in demo_calendars.items() %}
+        <label class="option">
+          <input type="radio" name="source" value="demo:{{ key }}" {{ 'checked' if src == 'demo:' ~ key }}>
+          <span><strong>Demo</strong> · {{ label }}</span>
+        </label>
+        {% endfor %}
+        <label class="option">
+          <input type="radio" name="source" value="ics" {{ 'checked' if src == 'ics' }}>
+          <span><strong>Upload .ics</strong> · export from any calendar app</span>
+        </label>
+        <div class="ics-input" id="ics-input">
+          <input type="file" name="ics_file" accept=".ics,text/calendar">
+        </div>
+        <label class="option {{ '' if google_connected else 'muted' }}">
+          <input type="radio" name="source" value="google" {{ 'checked' if src == 'google' }} {{ '' if google_connected else 'disabled' }}>
+          <span><strong>Google Calendar</strong> ·
+            {% if google_connected %}connected (free/busy only)
+            {% elif google_configured %}<a href="/auth/google/login">connect</a>
+            {% else %}not configured — see README{% endif %}
+          </span>
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>2 · Which week?</legend>
+        <div class="segmented">
+          {% for value, label in [('this', 'This week'), ('next', 'Next week')] %}
+          <label><input type="radio" name="week" value="{{ value }}" {{ 'checked' if (form.week or 'next') == value }}><span>{{ label }}</span></label>
+          {% endfor %}
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>3 · How committed are you?</legend>
+        <div class="segmented three">
+          {% for value, label, hint in [('light', 'Light', '≤2 / wk'), ('moderate', 'Moderate', '≤4 / wk'), ('dedicated', 'Dedicated', '≤6 / wk')] %}
+          <label><input type="radio" name="commitment" value="{{ value }}" {{ 'checked' if (form.commitment or 'moderate') == value }}><span>{{ label }}<small>{{ hint }}</small></span></label>
+          {% endfor %}
+        </div>
+      </fieldset>
+
+      <fieldset class="grid2">
+        <legend>4 · Details</legend>
+        <label>Preferred time
+          <select name="preferred_time">
+            {% for value, label in [('any', 'Any time'), ('morning', 'Morning'), ('midday', 'Midday'), ('evening', 'Evening')] %}
+            <option value="{{ value }}" {{ 'selected' if form.preferred_time == value }}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Session (min)
+          <input type="number" name="session_minutes" min="20" max="180" step="5" value="{{ form.session_minutes or 60 }}">
+        </label>
+        <label class="span2">Travel buffer before &amp; after (min)
+          <input type="number" name="buffer_minutes" min="0" max="60" step="5" value="{{ form.buffer_minutes if form.buffer_minutes is not none else 15 }}">
+        </label>
+        <label class="span2">Anything else? <small>(plain English)</small>
+          <textarea name="notes" rows="3" maxlength="1000" placeholder="e.g. I hate mornings, soccer on Tuesdays 6-7:30pm, no gym on Sundays">{{ form.notes or '' }}</textarea>
+        </label>
+      </fieldset>
+
+      <button type="submit" class="primary">Plan my week</button>
+    </form>
+  </aside>
+
+  <!-- ========================================================= results -->
+  <section class="results">
+  {% if plan %}
+    <div class="card summary">
+      <div>
+        <p class="eyebrow">Week of {{ plan.week_start.strftime('%b %d') }}</p>
+        <h2>{{ plan.split_name }}</h2>
+        <p class="explanation">{{ plan.explanation }}</p>
+      </div>
+      <div class="stats">
+        <div><b>{{ plan.free_days|length }}</b><span>open days</span></div>
+        <div><b>{{ plan.workouts|length }}</b><span>sessions</span></div>
+      </div>
+    </div>
+
+    {% if parsed and parsed.source != 'none' %}
+    <p class="parsed">Read your note with <b>{{ 'Claude' if parsed.source == 'ai' else 'the rule-based parser' }}</b>:
+      {% if parsed.preferred_time %}<span class="chip">{{ parsed.preferred_time.value }}</span>{% endif %}
+      {% if parsed.commitment %}<span class="chip">{{ parsed.commitment.value }}</span>{% endif %}
+      {% if parsed.session_minutes %}<span class="chip">{{ parsed.session_minutes }} min</span>{% endif %}
+      {% if parsed.earliest_start %}<span class="chip">not before {{ parsed.earliest_start.strftime('%H:%M') }}</span>{% endif %}
+      {% for d in parsed.blocked_weekdays|sort %}<span class="chip">no {{ ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][d] }}</span>{% endfor %}
+      {% for r in parsed.recurring_busy %}<span class="chip">{{ r.title }} {{ ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][r.weekday] }} {{ r.start.strftime('%H:%M') }}–{{ r.end.strftime('%H:%M') }}</span>{% endfor %}
+    </p>
+    {% endif %}
+
+    <div class="card week">
+      <div class="week-grid">
+        <div class="gutter">
+          <div class="day-head"></div>
+          <div class="hours">
+            {% for h in hours %}<span style="top: {{ (loop.index0 / hours|length * 100)|round(3) }}%">{{ (h - 1) % 12 + 1 }}{{ 'a' if h < 12 else 'p' }}</span>{% endfor %}
+          </div>
+        </div>
+        {% for day in week_view %}
+        <div class="day {{ 'free' if day.free else 'full' }}">
+          <div class="day-head"><b>{{ day.label }}</b><span>{{ day.date }}</span></div>
+          <div class="column" style="--rows: {{ hours|length }}">
+            {% for b in day.busy %}
+            <div class="block busy" style="top: {{ b.top|round(3) }}%; height: {{ b.height|round(3) }}%" title="{{ b.title }} · {{ b.time }}">
+              <span>{{ b.title }}</span>
+            </div>
+            {% endfor %}
+            {% for w in day.workouts %}
+            <div class="block workout t-{{ w.name|lower|replace(' ', '-') }}" style="top: {{ w.top|round(3) }}%; height: {{ w.height|round(3) }}%">
+              <b>{{ w.name }}</b><span>{{ w.time }}</span>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    {% if plan.workouts %}
+    <div class="sessions">
+      {% for w in plan.workouts %}
+      <article class="card session t-{{ w.name|lower|replace(' ', '-') }}">
+        <header><b>{{ w.name }}</b><span>{{ w.start.strftime('%a %b %d · %I:%M %p').replace(' 0', ' ') }}</span></header>
+        <ul>{% for e in w.exercises %}<li>{{ e }}</li>{% endfor %}</ul>
+      </article>
+      {% endfor %}
+    </div>
+
+    <div class="actions">
+      <form method="post" action="/export.ics">
+        <input type="hidden" name="plan_json" value="{{ plan_json }}">
+        <button class="secondary">Download .ics</button>
+      </form>
+      {% if google_connected %}
+      <form method="post" action="/google/add">
+        <input type="hidden" name="plan_json" value="{{ plan_json }}">
+        <input type="hidden" name="timezone" class="tz-copy">
+        <button class="primary">Add to Google Calendar</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <details class="card reasons">
+      <summary>How this plan was decided</summary>
+      <ol>{% for n in plan.notes %}<li>{{ n }}</li>{% endfor %}</ol>
+    </details>
+
+  {% else %}
+    <div class="card empty">
+      <h2>Workouts that bend to your schedule</h2>
+      <p>GymScheduleBot looks at when you're busy, finds the windows you can actually train, and picks the training split that fits.</p>
+      <ol class="how">
+        <li><b>Find free windows</b><span>Busy time plus a travel buffer is blocked out; only gaps long enough for a full session count.</span></li>
+        <li><b>Choose a split</b><span>2 days → Full Body. 4 → Upper/Lower. 5 → PPL + Upper/Lower. 6 → PPL ×2. Your commitment level sets the cap.</span></li>
+        <li><b>Protect recovery</b><span>No muscle group is trained on back-to-back days. If a split can't fit, it falls back to one that can.</span></li>
+      </ol>
+      <p class="hint">Try the <b>Busy student week</b> demo with “Moderate”, then switch to “Light” and compare.</p>
+    </div>
+  {% endif %}
+  </section>
+</main>
+
+<footer>Built with FastAPI · Scheduling is deterministic and unit-tested; AI only reads your notes and explains the plan.</footer>
+
+<script>
+  // Send the browser's time zone so plans use local time.
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  document.getElementById('tz').value = tz;
+  document.querySelectorAll('.tz-copy').forEach(el => el.value = tz);
+  // Only show the file picker when "Upload .ics" is selected.
+  const icsBox = document.getElementById('ics-input');
+  const sync = () => icsBox.hidden = document.querySelector('input[name=source]:checked')?.value !== 'ics';
+  document.querySelectorAll('input[name=source]').forEach(r => r.addEventListener('change', sync));
+  sync();
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+jinja2>=3.1
+python-multipart>=0.0.9
+itsdangerous>=2.2
+pydantic>=2.7
+python-dotenv>=1.0
+icalendar>=6.0
+recurring-ical-events>=3.0
+google-auth>=2.30
+google-auth-oauthlib>=1.2
+google-api-python-client>=2.130
+anthropic>=0.40
