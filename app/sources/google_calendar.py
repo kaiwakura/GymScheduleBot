@@ -59,18 +59,24 @@ def finish_login(code: str, state: str, code_verifier: str | None) -> dict[str, 
     flow.code_verifier = code_verifier
     flow.fetch_token(code=code)
     creds = flow.credentials
+    # Only the user's own tokens go into their session cookie. The app's client
+    # secret stays on the server: the cookie is signed, not encrypted, so the
+    # user could read anything stored in it.
     return {
         "token": creds.token,
         "refresh_token": creds.refresh_token,
-        "token_uri": creds.token_uri,
-        "client_id": creds.client_id,
-        "client_secret": creds.client_secret,
-        "scopes": list(creds.scopes or SCOPES),
     }
 
 
 def build_service(creds_info: dict[str, Any]):
-    creds = Credentials.from_authorized_user_info(creds_info, SCOPES)
+    creds = Credentials(
+        token=creds_info.get("token"),
+        refresh_token=creds_info.get("refresh_token"),
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=os.environ["GOOGLE_CLIENT_ID"],
+        client_secret=os.environ["GOOGLE_CLIENT_SECRET"],
+        scopes=SCOPES,
+    )
     return build("calendar", "v3", credentials=creds, cache_discovery=False)
 
 

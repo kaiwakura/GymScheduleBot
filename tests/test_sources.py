@@ -124,3 +124,24 @@ def test_add_workouts_creates_one_event_each(prefs):
     _, body = service.inserted[0]
     assert body["summary"].startswith("Workout:")
     assert body["extendedProperties"]["private"]["app"] == "gymschedulebot"
+
+
+def test_session_never_holds_the_client_secret(monkeypatch):
+    """The session cookie is readable by the user, so it must only hold their own tokens."""
+    from app.sources import google_calendar as gc
+
+    class FakeFlow:
+        code_verifier = None
+        credentials = type("C", (), {"token": "access-123", "refresh_token": "refresh-456"})()
+
+        def fetch_token(self, code):
+            self.code = code
+
+    monkeypatch.setattr(gc, "_flow", lambda state=None: FakeFlow())
+    info = gc.finish_login("the-code", "state", "verifier")
+    assert info == {"token": "access-123", "refresh_token": "refresh-456"}
+
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "id")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "secret")
+    service = gc.build_service(info)
+    assert service._http.credentials.client_secret == "secret"

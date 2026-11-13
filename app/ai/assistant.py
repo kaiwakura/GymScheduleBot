@@ -133,60 +133,68 @@ def parse_notes_with_rules(text: str) -> ParsedNotes:
     return out
 
 
-# ================================================================== Claude ===
-_TOOL = {
-    "name": "set_preferences",
-    "description": "Record the user's workout scheduling preferences extracted from their note. "
-    "Only include fields the note actually mentions.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "preferred_time": {"type": "string", "enum": [t.value for t in TimeOfDay]},
-            "commitment": {
-                "type": "string",
-                "enum": [c.value for c in Commitment],
-                "description": "light = busy / just staying consistent; dedicated = training is a top priority",
-            },
-            "session_minutes": {"type": "integer", "minimum": 20, "maximum": 180},
-            "earliest_start": {"type": "string", "description": "HH:MM, 24h. Earliest they'd start a workout."},
-            "latest_end": {"type": "string", "description": "HH:MM, 24h. Latest a workout may end."},
-            "blocked_weekdays": {
-                "type": "array",
-                "items": {"type": "string", "enum": WEEKDAYS},
-                "description": "Days they never want to train.",
-            },
-            "recurring_busy": {
-                "type": "array",
-                "description": "Weekly commitments mentioned in the note that may not be on their calendar.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "weekday": {"type": "string", "enum": WEEKDAYS},
-                        "start": {"type": "string", "description": "HH:MM, 24h"},
-                        "end": {"type": "string", "description": "HH:MM, 24h"},
-                        "title": {"type": "string"},
-                    },
-                    "required": ["weekday", "start", "end", "title"],
+# ================================================================== Gemini ===
+# JSON Schema for Gemini's structured output: the model must answer with exactly this shape.
+PREFERENCES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "preferred_time": {"type": "string", "enum": [t.value for t in TimeOfDay]},
+        "commitment": {
+            "type": "string",
+            "enum": [c.value for c in Commitment],
+            "description": "light = busy / just staying consistent; dedicated = training is a top priority",
+        },
+        "session_minutes": {"type": "integer", "minimum": 20, "maximum": 180},
+        "earliest_start": {"type": "string", "description": "HH:MM, 24h. Earliest they'd start a workout."},
+        "latest_end": {"type": "string", "description": "HH:MM, 24h. Latest a workout may end."},
+        "blocked_weekdays": {
+            "type": "array",
+            "items": {"type": "string", "enum": WEEKDAYS},
+            "description": "Days they never want to train.",
+        },
+        "recurring_busy": {
+            "type": "array",
+            "description": "Weekly commitments mentioned in the note that may not be on their calendar.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "weekday": {"type": "string", "enum": WEEKDAYS},
+                    "start": {"type": "string", "description": "HH:MM, 24h"},
+                    "end": {"type": "string", "description": "HH:MM, 24h"},
+                    "title": {"type": "string"},
                 },
+                "required": ["weekday", "start", "end", "title"],
             },
         },
     },
 }
 
+PARSE_INSTRUCTIONS = (
+    "You extract workout-scheduling preferences from a short note. "
+    "Only include fields the note actually mentions. Use 24-hour HH:MM times."
+)
+EXPLAIN_INSTRUCTIONS = (
+    "You are a friendly strength coach. In 2-3 short sentences, explain this week's workout "
+    "plan to the user using ONLY the facts given. Mention why this split was chosen. "
+    "No lists, no markdown, no made-up details."
+)
+
 
 def _client():
-    if not os.getenv("ANTHROPIC_API_KEY"):
+    """A Gemini client, or None when no API key is set (the app then uses the rule-based parser)."""
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
         return None
-    import anthropic
+    from google import genai
 
-    return anthropic.Anthropic()
+    return genai.Client(api_key=api_key)
 
 
 def _model() -> str:
-    return os.getenv("ANTHROPIC_MODEL", "claude-haiku-5-5")
+    return os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
 
-def _notes_from_tool_input(data: dict) -> ParsedNotes:
+def _notes_from_ai_json(data: dict) -> ParsedNotes:
     out = ParsedNotes(source="ai")
     if v := data.get("preferred_time"):
         out.preferred_time = TimeOfDay(v)
@@ -209,7 +217,7 @@ def _notes_from_tool_input(data: dict) -> ParsedNotes:
 def parse_notes(text: str, client=None) -> ParsedNotes:
     """Turn the user's free-text note into structured preferences.
 
-    Uses Claude when an API key is configured, otherwise (or on any error) the rule-based parser.
+    Uses Gemini when an API key is configured, otherwise (or on any error) the rule-based parser.
     """
     if not text.strip():
         return ParsedNotes(source="none")
@@ -217,16 +225,18 @@ def parse_notes(text: str, client=None) -> ParsedNotes:
     if client is None:
         return parse_notes_with_rules(text)
     try:
-        response = client.messages.create(
+        from google.genai import types
+
+        response = client.models.generate_content(
             model=_model(),
-            max_tokens=1024,
-            system="You extract workout-scheduling preferences from a short note. Use 24-hour HH:MM times.",
-            tools=[_TOOL],
-            tool_choice={"type": "tool", "name": "set_preferences"},
-            messages=[{"role": "user", "content": text}],
+            contents=text,
+            config=types.GenerateContentConfig(
+                system_instruction=PARSE_INSTRUCTIONS,
+                response_mime_type="application/json",
+                response_json_schema=PREFERENCES_SCHEMA,
+            ),
         )
-        tool_use = next(b for b in response.content if b.type == "tool_use")
-        return _notes_from_tool_input(tool_use.input)
+        return _notes_from_ai_json(json.loads(response.text))
     except Exception:
         log.exception("AI preference parsing failed; falling back to rules")
         return parse_notes_with_rules(text)
@@ -250,17 +260,14 @@ def explain_plan(plan: WeeklyPlan, client=None) -> str:
         "planner_reasons": plan.notes,
     }
     try:
-        response = client.messages.create(
+        from google.genai import types
+
+        response = client.models.generate_content(
             model=_model(),
-            max_tokens=300,
-            system=(
-                "You are a friendly strength coach. In 2-3 short sentences, explain this week's workout "
-                "plan to the user using ONLY the facts given. Mention why this split was chosen. "
-                "No lists, no markdown, no made-up details."
-            ),
-            messages=[{"role": "user", "content": json.dumps(facts)}],
+            contents=json.dumps(facts),
+            config=types.GenerateContentConfig(system_instruction=EXPLAIN_INSTRUCTIONS),
         )
-        text = "".join(b.text for b in response.content if b.type == "text").strip()
+        text = (response.text or "").strip()
         return text or fallback_explanation(plan)
     except Exception:
         log.exception("AI explanation failed; using fallback")

@@ -116,7 +116,7 @@
     </div>
 
     {% if parsed and parsed.source != 'none' %}
-    <p class="parsed">Read your note with <b>{{ 'Claude' if parsed.source == 'ai' else 'the rule-based parser' }}</b>:
+    <p class="parsed">Read your note with <b>{{ 'Gemini' if parsed.source == 'ai' else 'the rule-based parser' }}</b>:
       {% if parsed.preferred_time %}<span class="chip">{{ parsed.preferred_time.value }}</span>{% endif %}
       {% if parsed.commitment %}<span class="chip">{{ parsed.commitment.value }}</span>{% endif %}
       {% if parsed.session_minutes %}<span class="chip">{{ parsed.session_minutes }} min</span>{% endif %}

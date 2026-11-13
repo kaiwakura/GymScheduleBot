@@ -20,7 +20,7 @@ A busy person automatically gets two full-body days. A dedicated lifter with an 
 ## Features
 
 - **Calendar input:** Google Calendar (OAuth, reads **free/busy only**, never event details), `.ics` upload from any calendar app, or built-in demo weeks so anyone can try it without signing in.
-- **Plain-English preferences:** "I hate mornings, soccer on Tuesdays 6–7:30pm, no gym on Sundays" becomes structured settings. Uses Claude when an API key is set, otherwise a rule-based parser.
+- **Plain-English preferences:** "I hate mornings, soccer on Tuesdays 6–7:30pm, no gym on Sundays" becomes structured settings. Uses Gemini when an API key is set, otherwise a rule-based parser.
 - **Recovery-aware scheduling:** never trains the same muscle group on back-to-back days, and spreads sessions evenly across the week.
 - **Respects real life:** travel buffer before and after every event, earliest/latest workout times, preferred time of day, and no times that have already passed.
 - **Export:** one click to add workouts to Google Calendar, or download an `.ics`.
@@ -49,7 +49,7 @@ A busy person automatically gets two full-body days. A dedicated lifter with an 
 
 ## Tech stack
 
-Python 3.11+ · FastAPI · Jinja2 · Google Calendar API (OAuth 2.0 with PKCE) · Anthropic Claude API (tool use for structured output) · icalendar · pytest · ruff · GitHub Actions
+Python 3.11+ · FastAPI · Jinja2 · Google Calendar API (OAuth 2.0 with PKCE) · Google Gemini API (structured JSON output) · icalendar · pytest · ruff · GitHub Actions
 
 ## Run it locally
 
@@ -73,16 +73,17 @@ ruff check . && ruff format --check .
 
 ### Optional: turn on AI
 
-Add `ANTHROPIC_API_KEY=...` to `.env` (get one at https://console.anthropic.com). The model is set by `ANTHROPIC_MODEL`.
+Add `GEMINI_API_KEY=...` to `.env` (get a free key at https://aistudio.google.com/apikey). The model is set by `GEMINI_MODEL`. Note: on Gemini's free tier, Google may use requests to improve its products, so the app only ever sends your plain-English note and the plan summary, never calendar data.
 
 ### Optional: connect Google Calendar
 
 1. In [Google Cloud Console](https://console.cloud.google.com/), create a project and **enable the Google Calendar API**.
 2. **OAuth consent screen:** choose External, add the scopes `calendar.freebusy` and `calendar.events`, and add your own Google account as a **test user**.
-3. **Credentials → Create OAuth client ID → Web application.** Add the authorized redirect URI `http://localhost:8000/auth/google/callback`.
-4. Put the client ID and secret into `.env` as `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, then restart the server.
+3. **Credentials → Create OAuth client ID → Web application.** Add an authorized redirect URI for each place the app runs, e.g. `http://localhost:8000/auth/google/callback` and `https://<your-app>.onrender.com/auth/google/callback`.
+4. Locally: put the client ID and secret into `.env` as `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, then restart the server.
+   Deployed: set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `GOOGLE_REDIRECT_URI` (the deployed callback URL) as environment variables. Don't set `OAUTHLIB_INSECURE_TRANSPORT` there.
 
-While the app is in Google's "Testing" mode, only the test users you add can sign in. That's why the demo calendars exist.
+While the app is in Google's "Testing" mode, only the test users you add can sign in (up to 100), and their sign-in lasts 7 days. That's why the demo calendars exist: anyone can try the planner without Google.
 
 ## Project structure
 
@@ -98,7 +99,7 @@ app/
     google_calendar.py    OAuth, free/busy, add events
     ics.py                .ics import (incl. recurring events) and export
     demo.py               sample weeks
-  ai/assistant.py         Claude tool-use parsing + explanations, rule-based fallback
+  ai/assistant.py         Gemini structured-output parsing + explanations, rule-based fallback
   templates/, static/     UI
 tests/                    unit + integration tests
 ```
@@ -115,7 +116,7 @@ tests/                    unit + integration tests
 ## Security notes
 
 - Reads only free/busy data from Google, never event titles or descriptions.
-- OAuth uses `state` and PKCE. Tokens live in a signed session cookie (fine for a demo; a production version would store them encrypted server-side).
+- OAuth uses `state` and PKCE. The user's own tokens live in a signed session cookie (fine for a demo; a production version would store them encrypted server-side). The app's client secret never leaves the server.
 - Secrets come from environment variables, and `.env` is git-ignored.
 
 ## License

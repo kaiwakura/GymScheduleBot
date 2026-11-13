@@ -54,7 +54,7 @@ def _page(request: Request, **context) -> HTMLResponse:
         {
             "google_configured": google_calendar.is_configured(),
             "google_connected": "google_creds" in request.session,
-            "ai_enabled": bool(os.getenv("ANTHROPIC_API_KEY")),
+            "ai_enabled": bool(os.getenv("GEMINI_API_KEY")),
             "demo_calendars": {k: v[0] for k, v in DEMO_CALENDARS.items()},
             **context,
         },

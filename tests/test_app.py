@@ -63,3 +63,10 @@ def test_export_ics_download():
     r = client.post("/export.ics", data={"plan_json": plan_json})
     assert r.headers["content-type"].startswith("text/calendar")
     assert len(list(Calendar.from_ical(r.content).walk("VEVENT"))) >= 1
+
+
+def test_home_page_defaults_are_filled_and_css_is_relative():
+    """Regression: the empty form must submit cleanly, and CSS must load behind proxies (e.g. Codespaces)."""
+    page = client.get("/").text
+    assert 'name="buffer_minutes" min="0" max="60" step="5" value="15"' in page
+    assert 'href="/static/style.css"' in page

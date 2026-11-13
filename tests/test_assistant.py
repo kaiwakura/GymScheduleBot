@@ -1,3 +1,4 @@
+import json
 from datetime import time
 from types import SimpleNamespace
 
@@ -47,42 +48,57 @@ def test_empty_note_changes_nothing():
     assert parse_notes("   ").apply(Preferences()) == Preferences()
 
 
-# ------------------------------------------------- Claude path (fake client) ---
-class FakeClient:
-    def __init__(self, content=None, error=None):
-        self.content, self.error, self.calls = content, error, []
-        self.messages = self
+# ------------------------------------------------- Gemini path (fake client) ---
+class FakeGemini:
+    """Stands in for google.genai.Client: client.models.generate_content(...) -> response.text"""
 
-    def create(self, **kwargs):
+    def __init__(self, text=None, error=None):
+        self.text, self.error, self.calls = text, error, []
+        self.models = self
+
+    def generate_content(self, **kwargs):
         self.calls.append(kwargs)
         if self.error:
             raise self.error
-        return SimpleNamespace(content=self.content)
+        return SimpleNamespace(text=self.text)
 
 
-def test_ai_tool_output_is_converted():
-    tool_input = {
+def test_ai_json_output_is_converted():
+    ai_json = {
         "preferred_time": "evening",
         "commitment": "dedicated",
         "blocked_weekdays": ["sunday"],
         "recurring_busy": [{"weekday": "tuesday", "start": "18:00", "end": "19:30", "title": "Soccer"}],
     }
-    client = FakeClient([SimpleNamespace(type="tool_use", input=tool_input)])
+    client = FakeGemini(text=json.dumps(ai_json))
     notes = parse_notes("evenings, very committed, no sundays, soccer tue 6-7:30pm", client=client)
     assert notes.source == "ai"
     assert notes.commitment is Commitment.DEDICATED
     assert notes.blocked_weekdays == {6}
     assert notes.recurring_busy[0].start == time(18, 0)
-    assert client.calls[0]["tool_choice"]["name"] == "set_preferences"
+    config = client.calls[0]["config"]
+    assert config.response_mime_type == "application/json"
+    assert config.response_json_schema["properties"]["commitment"]["enum"] == ["light", "moderate", "dedicated"]
 
 
-def test_ai_failure_falls_back_to_rules():
-    notes = parse_notes("mornings please", client=FakeClient(error=RuntimeError("API down")))
+def test_ai_bad_json_falls_back_to_rules():
+    notes = parse_notes("mornings please", client=FakeGemini(text="not json"))
     assert notes.source == "rules"
     assert notes.preferred_time is TimeOfDay.MORNING
 
 
+def test_ai_failure_falls_back_to_rules():
+    notes = parse_notes("mornings please", client=FakeGemini(error=RuntimeError("API down")))
+    assert notes.source == "rules"
+    assert notes.preferred_time is TimeOfDay.MORNING
+
+
+def test_explanation_uses_ai_text():
+    plan = build_plan([], MONDAY, Preferences())
+    assert explain_plan(plan, client=FakeGemini(text="  Great week ahead!  ")) == "Great week ahead!"
+
+
 def test_explanation_fallback_without_ai():
     plan = build_plan([], MONDAY, Preferences())
-    client = FakeClient(error=RuntimeError("API down"))
+    client = FakeGemini(error=RuntimeError("API down"))
     assert plan.split_name in explain_plan(plan, client=client)
